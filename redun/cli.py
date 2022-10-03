@@ -1516,20 +1516,35 @@ class RedunClient:
             # Convert relative task name to fullname.
             task_fullname = "{}.{}".format(module.redun_namespace, args.task)
         task = scheduler.task_registry.get(task_fullname)
-        if not task:
+
+        # Added to gatebio fork (ssmith)
+        if task:
+            task_creation_func = None
+            entrypoint_arg_parser, cli2arg = get_task_arg_parser(task)
+        else:
+            try:
+                matches = re.match(r'^(.*)\.([^\.]+)$', task_fullname)
+                (mname, fname) = matches.groups()
+            except Exception as e:
+                raise ValueError(f"Cannot parse module name and function from {task_fullname}!")
+            if module not in sys.modules:
+                module = importlib.import_module(mname)
+            task_creation_func = getattr(module, fname)
+            entrypoint_arg_parser, cli2arg = get_func_arg_parser(task_creation_func)
+
+        if not task and not task_creation_func:
             raise RedunClientError('Unknown task "{}"'.format(task_fullname))
 
         # Determine arguments for task.
-        task_arg_parser, cli2arg = get_task_arg_parser(task)
-        task_args = task_arg_parser.parse_args(extra_args)
+        entrypoint_args = entrypoint_arg_parser.parse_args(extra_args)
 
         # Determine if task-level help is needed.
-        if task_args.show_help:
-            self.display(task_arg_parser.format_help())
+        if entrypoint_args.show_help:
+            self.display(entrypoint_arg_parser.format_help())
             return None
 
         # Determine if task-level info is needed.
-        if task_args.show_info:
+        if entrypoint_args.show_info and task is not None:
             self.log_task(task, show_job=False)
             return None
 
@@ -1549,7 +1564,7 @@ class RedunClient:
 
         # Parse cli arguments to task arguments.
         for dest, arg in cli2arg.items():
-            value = getattr(task_args, dest)
+            value = getattr(entrypoint_args, dest)
             if value is not None:
                 kwargs[arg] = value
 
@@ -1557,6 +1572,12 @@ class RedunClient:
         if args.option:
             task_options = dict(map(parse_tag_key_value, args.option))
             task = task.options(**task_options)
+
+        # Handle indirect task creation.
+        if task_creation_func is not None:
+            task = task_creation_func(*pos_args, **kwargs)
+            pos_args = tuple()
+            kwargs = {}
 
         # Determine execution tags.
         tags: List[Tuple[str, Any]] = get_default_execution_tags()
@@ -1569,8 +1590,11 @@ class RedunClient:
         if args.project:
             tags.append((PROJECT_KEY, args.project))
         elif not any(key == PROJECT_KEY for key, _ in tags):
-            project = infer_project_name(task)
-            if project:
+            if task_creation_func is not None:
+                project = mname
+            else:
+                project = infer_project_name(task)
+            if project is not None:
                 tags.append((PROJECT_KEY, project))
 
         if args.user:
