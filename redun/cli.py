@@ -762,8 +762,28 @@ def get_task_arg_parser(
     """
     Returns a CLI parser for a redun Task.
     """
+    return create_parser(prog=task.fullname,
+                         description=task.__doc__,
+                         sig=task.signature)
+
+def get_func_arg_parser(
+    f: Callable,
+) -> Tuple[argparse.ArgumentParser, Dict[str, str]]:
+    """
+    Returns a CLI parser for a simple function.
+    """
+    return create_parser(prog=f.__name__,
+                         description=f.__doc__,
+                         sig=inspect.signature(f))
+
+
+def create_parser(
+    prog: str,
+    description: str,
+    sig: inspect.Signature
+) -> Tuple[argparse.ArgumentParser, Dict[str, str]]:
     parser = argparse.ArgumentParser(
-        prog=task.fullname, description=task.func.__doc__, formatter_class=ArgFormatter
+        prog=prog, description=description, formatter_class=ArgFormatter
     )
     parser.set_defaults(show_help=False)
     parser.set_defaults(show_info=False)
@@ -778,7 +798,6 @@ def get_task_arg_parser(
     info_parser.set_defaults(show_info=True)
 
     cli2arg = {}
-    sig = task.signature
     for param in sig.parameters.values():
         opt = add_value_arg_parser(
             parser,
